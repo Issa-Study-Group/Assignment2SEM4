@@ -1,0 +1,380 @@
+---
+title: "Assignment 2"
+author: "Lasse Hansen"
+date: "3/2/2021"
+output: html_document
+---
+
+### Loading packages and data
+
+```{r}
+pacman::p_load(
+  tidyverse,
+  here,
+  rethinking,
+  brms,
+  ggpubr
+)
+
+d <- read_csv("Ass2.csv")
+d <-
+  d %>% 
+  mutate(Diagnosis = factor(Diagnosis)) %>% 
+  mutate(AltercentricIntrusion = scale(AltercentricIntrusion)) %>% 
+  mutate(MindReading = scale(MindReading)) %>% 
+  mutate(VoiceHearing = scale(VoiceHearing)) %>% 
+  mutate(Apathy = scale(Apathy))         
+```
+
+### First part
+
+### Q1.1) Does schizophrenia involve altercentric intrusion? Define model and priors. Test the implications of your priors (prior predictive checks) and if needed adjust them. Run the model. Test the quality of the fitted model (posterior predictive checks, prior-posterior updates). Assess the evidence in favor of an increased altercentric intrusion in schizophrenia. Report the model and the results, including plots.
+### Visualizing the distributions first 
+
+```{r}
+ggdensity(d, x = "AltercentricIntrusion",
+   add = "mean", rug = TRUE,
+   color = "Diagnosis", fill = "Diagnosis",
+   palette = c("#00AFBB", "#E7B800"))
+```
+
+### Checking prior fit - visualizing the joint expectations of the model (prior + likelihood function)
+```{r}
+AI_f1 <- bf(AltercentricIntrusion ~ 1 + Diagnosis)
+```
+
+#### Checking get prior
+
+```{r}
+get_prior(
+  AI_f1,
+  d,
+  family=gaussian
+)
+```
+
+### Setting priors for the first model
+
+```{r}
+AI_p1 <- c(
+  prior(normal(0, 2), class = Intercept),
+  prior(normal(0, 0.5), class = sigma),
+  prior(normal(0.25, 0.25), class = b)
+)
+```
+
+### Sampling the prior 
+
+```{r}
+AI_m1_prior <- brm(
+  formula = AI_f1,
+  data = d,
+  family = gaussian,
+  prior = AI_p1,
+  sample_prior="only"
+)
+```
+
+### Visualizing the prior predictive check with the prior sat  
+
+```{r}
+pp_check(AI_m1_prior, nsamples=100)
+```
+
+### Fit the model
+
+```{r}
+
+AI_m1_v2 <- brm(
+  formula = AI_f1,
+  data = d,
+  family = gaussian,
+  prior = AI_p1,
+  sample_prior=T,
+  backend="cmdstanr",
+  threads = threading(2),
+  chains = 4
+)
+```
+
+### Sampling from the posterior and plotting it 
+
+```{r}
+### 
+posterior <- posterior_samples(AI_m1_v2)
+
+ggplot(posterior) +
+  theme_classic() +
+  geom_density(aes(prior_Intercept), fill="red", alpha=0.3) +
+  geom_density(aes(b_Intercept), fill="blue", alpha=0.5)
+
+ggplot(posterior) +
+  theme_classic() +
+  geom_density(aes(prior_sigma), fill="red", alpha=0.3) +
+  geom_density(aes(sigma), fill="blue", alpha=0.5) 
+
+ggplot(posterior) +
+  theme_classic() +
+  geom_density(aes(prior_b), fill="red", alpha=0.3) +
+  geom_density(aes(b_Diagnosis1), fill="blue", alpha=0.5)
+```
+
+### Plotting conditional effects
+
+```{r}
+conditional_effects(AI_m1_v2)
+plot(conditional_effects(AI_m1_v2), points=T)
+
+plot(conditional_effects(AI_m1_v2, spaghetti=T, nsamples=100, method = "fitted"), points=T)
+
+plot(conditional_effects(AI_m1_v2, spaghetti=T, nsamples=100, method = "predict"), points=T)
+```
+
+### Hypothesis testing
+
+```{r}
+hypothesis(AI_m1_v2, "Diagnosis1 > 0")
+```
+
+### Q1.2) Is altercentric intrusion related to specific symptoms *in the patients*? Identify which of the symptoms could be relevant (given their description above). Should you include more than one symptom? Build models, priors, predictive checks. Assess the evidence and report models and results, including plots. Discuss whether the results make sense.
+
+### Specifying the model
+
+```{r}
+AI_f3 <- bf(AltercentricIntrusion ~ 1 + VoiceHearing + MindReading + Apathy)
+```
+
+### Seing the priors
+
+```{r}
+get_prior(
+  AI_f3,
+  d,
+  family=gaussian
+)
+```
+
+### Setting our own priors
+
+```{r}
+Mod2_p1 <- c(
+  prior(normal(0, 0.25), class = Intercept),
+  prior(normal(0, 1), class = sigma),
+  prior(normal(0, 0.25), class = b, coef = Apathy),
+  prior(normal(0.25, 0.5), class = b, coef = MindReading),
+  prior(normal(0.25, 0.5), class = b, coef = VoiceHearing)
+)
+
+```
+
+### Sampling priors
+
+```{r}
+Mod2_prior <- brm(
+  formula = AI_f3,
+  data = d,
+  family = gaussian,
+  prior = Mod2_p1,
+  sample_prior="only"
+)
+```
+
+### Prior predictive check
+
+```{r}
+pp_check(Mod2_prior, nsamples=100)
+```
+
+### Fitting the model
+
+```{r}
+Mod2 <- brm(
+  formula = AI_f3,
+  data = d,
+  family = gaussian,
+  prior = Mod2_p1,
+  sample_prior=T,
+  backend="cmdstanr",
+  threads = threading(2),
+  chains = 4
+)
+```
+
+### Sampling from the posterior and plotting coefficients, sigma and intercept
+
+```{r}
+### 
+posterior_mod2 <- posterior_samples(Mod2)
+
+ggplot(posterior_mod2) +
+  theme_classic() +
+  geom_density(aes(prior_Intercept), fill="red", alpha=0.3) +
+  geom_density(aes(b_Intercept), fill="blue", alpha=0.5)
+
+ggplot(posterior_mod2) +
+  theme_classic() +
+  geom_density(aes(prior_sigma), fill="red", alpha=0.3) +
+  geom_density(aes(sigma), fill="blue", alpha=0.5) 
+
+ggplot(posterior_mod2) +
+  theme_classic() +
+  geom_density(aes(prior_b_VoiceHearing), fill="red", alpha=0.3) +
+  geom_density(aes(b_VoiceHearing), fill="blue", alpha=0.5)
+
+ggplot(posterior_mod2) +
+  theme_classic() +
+  geom_density(aes(prior_b_MindReading), fill="red", alpha=0.3) +
+  geom_density(aes(b_MindReading), fill="blue", alpha=0.5)
+
+ggplot(posterior_mod2) +
+  theme_classic() +
+  geom_density(aes(prior_b_Apathy), fill="red", alpha=0.3) +
+  geom_density(aes(b_Apathy), fill="blue", alpha=0.5)
+
+```
+
+### Plotting the conditional effects 
+
+```{r}
+conditional_effects(Mod2)
+plot(conditional_effects(Mod2), points=T)
+
+plot(conditional_effects(Mod2, spaghetti=T, nsamples=100, method = "fitted"), points=T)
+
+plot(conditional_effects(Mod2, spaghetti=T, nsamples=100, method = "predict"), points=T)
+```
+
+### Hypothesis tests for fun :)))
+
+```{r}
+hypothesis(Mod2, "VoiceHearing > 0")
+hypothesis(Mod2, "MindReading > 0")
+```
+
+
+### Q2.1) However, we know that the diagnosis is based on symptom assessment: if the overall sum of symptoms is severe enough, the participant gets a diagnosis. In other words, by selecting the patients, and including the symptoms in the model we might have inadvertently introduced an issue in our inference. Do try to draw a causal graph (Directed Acyclical Graph) of the variables and compare it with the types of causal graphs presented in the slides. Discuss which biases you might have introduced.
+
+#### Using daggity to make two dags, one that shows the overall 'system' and one with open paths:
+
+```{r}
+pacman::p_load(dagitty, ggdag)
+AI_DAG <- dagify(
+       AI ~ VH + MR,
+       D ~ MR + VH + AP,
+       labels = c("D" = "Diagnosis", 
+                  "AI"= "Altercentric Intrusion",
+                  "VH" = "Voice Hearing",
+                  "MR" = "Mind Reading",
+                  "AP" = "Apathy"),
+       exposure = "D",
+       outcome = "AI") %>% 
+  tidy_dagitty()
+
+#Plot of overall system
+
+ggdag(AI_DAG, text = FALSE, use_labels = "label", shadow = TRUE) +
+  theme_dag(base_size = 14) +
+  theme(legend.position = "none", strip.text = element_blank()) + 
+  # set node aesthetics
+  scale_color_manual(values = "#0072B2", na.value = "grey80") + 
+  # set label aesthetics
+  scale_fill_manual(values = "#0072B2", na.value = "grey80") + 
+  # set arrow aesthetics
+  ggraph::scale_edge_color_manual(values = "#0072B2", na.value = "grey80") +
+  ggtitle("Paths of Altercentric Intrusion in Schizophrenic People")
+
+#Plot of paths
+
+ggdag_paths(AI_DAG, text = FALSE, use_labels = "label", shadow = TRUE) +
+  theme_dag(base_size = 14) +
+  theme(legend.position = "none", strip.text = element_blank()) + 
+  # set node aesthetics
+  scale_color_manual(values = "#0072B2", na.value = "grey80") + 
+  # set label aesthetics
+  scale_fill_manual(values = "#0072B2", na.value = "grey80") + 
+  # set arrow aesthetics
+  ggraph::scale_edge_color_manual(values = "#0072B2", na.value = "grey80") +
+  ggtitle("Paths of Altercentric Intrusion in Schizophrenic People")
+```
+
+So we see that 'Mind Reading' and 'Voice Hearing' both affect a persons Altercentric intrusion. Because, a diagnosis is only assumed to be a label and not a causal driving factor of this small network, we must not close its backdoor. This will essentially lead to Voice Hearing and Mind Raind to be defined as confounders in our causal network. As, apathy is not assumed to have an effect of altercentric intrusion, we will not include this in our model.
+
+### Q2.2.) Redesign your analysis following the graph and report how the results change
+
+### Specifying the model
+
+```{r}
+AI_f3 <- bf(AltercentricIntrusion ~ 1 + VoiceHearing + MindReading)
+```
+
+### Setting priors, sampling from it and making prior predictive check
+
+```{r}
+AI_C3 <- c(
+  prior(normal(0, 1), class = Intercept),
+  prior(normal(1, 0.5), class = sigma),
+  prior(normal(0.2, 0.5), class = b, coef = VoiceHearing),
+  prior(normal(0.2, 0.5), class = b, coef = MindReading)
+)
+
+
+AI_C3_Prior <- brm(
+  formula = AI_f3,
+  data = d,
+  family = gaussian,
+  prior = AI_C3,
+  sample_prior="only"##,
+  #backend="cmdstanr",
+  #threads = threading(2)
+)
+
+pp_check(AI_C3_Prior, nsamples=100)
+```
+
+### Making model, sampling from posterior and plotting posterior sample
+
+```{r}
+AI_Mod3 <- brm(
+  formula = AI_f3,
+  data = d,
+  family = gaussian,
+  prior = AI_C3,
+  sample_prior=T,
+  backend="cmdstanr",
+  threads = threading(2)
+)
+
+posterior_mod3 <- posterior_samples(AI_Mod3)
+
+ggplot(posterior_mod3) +
+  theme_classic() +
+  geom_density(aes(prior_Intercept), fill="red", alpha=0.3) +
+  geom_density(aes(b_Intercept), fill="blue", alpha=0.5)
+
+ggplot(posterior_mod3) +
+  theme_classic() +
+  geom_density(aes(prior_sigma), fill="red", alpha=0.3) +
+  geom_density(aes(sigma), fill="blue", alpha=0.5) 
+
+ggplot(posterior_mod3) +
+  theme_classic() +
+  geom_density(aes(prior_b_VoiceHearing), fill="red", alpha=0.3) +
+  geom_density(aes(b_VoiceHearing), fill="blue", alpha=0.5)
+
+ggplot(posterior_mod3) +
+  theme_classic() +
+  geom_density(aes(prior_b_MindReading), fill="red", alpha=0.3) +
+  geom_density(aes(b_MindReading), fill="blue", alpha=0.5)
+
+```
+
+### Plotting conditional effects 
+
+```{r}
+conditional_effects(AI_Mod3)
+plot(conditional_effects(AI_Mod3), points=T)
+
+```
+
+
+
