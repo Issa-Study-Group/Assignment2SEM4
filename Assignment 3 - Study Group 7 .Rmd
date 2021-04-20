@@ -1,0 +1,325 @@
+---
+title: "Assignment 3 - Applying meta-analytic priors"
+author: "Kristian Severin, Lasse Hansen, Nikolaj Munch & Sarah Nielsen"
+output: html_document
+---
+
+#### Loading packages and data
+
+```{r}
+
+pacman::p_load(tidyverse, 
+               metafor, 
+               brms,
+               tidybayes,
+               ggdist,
+               bayesplot)
+
+Meta_D <- read_delim("Ass3_MetaAnalysisData.tsv", "\t")
+Meta_D <- Meta_D %>% 
+  mutate(
+    PitchVariabilityASD_Mean = as.numeric(PitchVariabilityASD_Mean),
+    PitchVariabilityTD_Mean = as.numeric(PitchVariabilityTD_Mean),
+    PitchVariabilityASD_SD = as.numeric(PitchVariabilityASD_SD),
+    PitchVariabilityTD_SD = as.numeric(PitchVariabilityTD_SD)
+  )
+```
+
+#### Cleaning up data and calculating effect size
+
+```{r}
+#Removing empty rows
+Meta_D = Meta_D %>% subset(!is.na(Paper))
+
+
+#Calculating effect size
+
+Meta_D = escalc(measure = "SMD",
+           n1i = TD_N,
+           n2i = ASD_N,
+           m1i = PitchVariabilityTD_Mean,
+           m2i = PitchVariabilityASD_Mean,
+           sd1i = PitchVariabilityTD_SD,
+           sd2i = PitchVariabilityASD_SD,
+           data = Meta_D,
+           slab = Paper)
+           
+#Getting standard error and renaming the effect size column 
+Meta_D = Meta_D %>% 
+  mutate(
+    StandardError = sqrt(vi)) %>% 
+  rename(EffectSize = yi)
+
+#Making unique paper column
+Meta_D$ID <- 200:240
+cols <- c("ID", "Population", "Paper")
+
+
+Meta_D$Paper <- apply( Meta_D[ , cols ] , 1 , paste0 , collapse = "")
+Meta_D$Paper
+```
+
+#### Specifying formula, setting priors and running models
+
+```{r}
+Ma_f <- bf(EffectSize | se(StandardError) ~ 1 + (1 | Paper))
+
+get_prior(Ma_f, data = Meta_D, family = gaussian())
+
+MA_Prior <- c(
+  prior(normal(0, 1), class = Intercept),
+  prior(normal(1, .3), class = sd)
+)
+
+
+MA_m0 <- brm(
+  Ma_f,
+  data = Meta_D,
+  family = gaussian(),
+  prior = MA_Prior,
+  sample_prior = "only",
+  chains = 2,
+  cores = 2
+)
+
+
+pp_check(MA_m0, nsamples = 100)
+```
+
+
+```{r}
+MA_m1 <- 
+   brm(
+  Ma_f,
+  data = Meta_D,
+  family = gaussian(),
+  prior = MA_Prior,
+  sample_prior = T,
+  chains = 2,
+  cores = 2
+)
+
+pp_check(MA_m1, nsamples = 100) 
+```
+
+#### Getting summary from the meta-analysis
+
+```{r}
+summary(MA_m1)
+```
+
+
+#### Visualizing cohens d from the different studies
+
+```{r}
+
+# Study-specific effects are deviations + average
+out_r <- spread_draws(MA_m1, r_Paper[Paper, term], b_Intercept) %>% 
+  mutate(b_Intercept = r_Paper + b_Intercept) 
+# Average effect
+out_f <- spread_draws(MA_m1, b_Intercept) %>% 
+  mutate(Paper = "Average")
+# Combine average and study-specific effects' data frames
+out_all <- bind_rows(out_r, out_f) %>% 
+  ungroup() %>%
+  # Ensure that Average effect is on the bottom of the forest plot
+  mutate(Paper = fct_relevel(Paper, "Average")) %>% 
+  # tidybayes garbles names so fix here
+  mutate(Paper = str_replace_all(Paper, "\\.", " "))
+# Data frame of summary numbers
+out_all_sum <- group_by(out_all, Paper) %>% 
+  mean_qi(b_Intercept)
+
+out_all1 = out_all %>% drop_na()
+# Draw plot
+out_all1 %>%
+  ggplot(aes(b_Intercept, Paper)) +
+  # Zero!
+  geom_vline(xintercept = 0, size = .25, lty = 2) +
+  stat_halfeye(.width = c(.8, .95), fill = "dodgerblue") +
+  # Add text labels
+  geom_text(
+    data = mutate_if(out_all_sum, is.numeric, round, 2),
+    aes(label = str_glue("{b_Intercept} [{.lower}, {.upper}]"), x = 0.75),
+    hjust = "inward"
+  ) +
+  # Observed as empty points
+  geom_point(
+    data = Meta_D %>% subset(!is.na(Meta_D$vi)) %>%  mutate(Paper = str_replace_all(Paper, "\\.", " ")), 
+    aes(x=vi), position = position_nudge(y = -.2), shape = 1 
+  )
+
+```
+
+
+### Step 2: Analyse pitch variability in ASD in two new studies for which you have access to all the trials (not just study level estimates)
+
+```{r}
+PV <- read_csv("Ass3_data.csv")
+
+#Scaling our variables so they match out cohens d
+PV[, 6:10] <- sapply(PV[, 6:10],scale)
+PV$Age <- scale(PV$Age)
+
+
+#visualizing data 
+
+ggpubr::ggdensity(PV, x = "Pitch_IQR",
+   add = "mean", rug = TRUE,
+   color = "Diagnosis", fill = "Diagnosis",
+   palette = c("#00AFBB", "#E7B800"))
+
+```
+
+
+### Step 3: Build a regression model predicting Pitch variability from Diagnosis
+
+```{r}
+
+PV_f <- bf(Pitch_IQR ~ 1 + Diagnosis + Age + (1|language:ID)
+
+get_prior(PV_f, data = PV, family = student())
+
+PV_Prior <- c(
+  prior(normal(0, 0.5), class = Intercept),  #prior for meta analytical effect size (very conservative)
+  prior(normal(0, 0.5), class = sd),
+  prior(normal(0, 0.25), class = b, coef = DiagnosisTD),
+  prior(normal(0,0.5), class = b, coef = Age),
+  prior(normal(0,0.2), class = sigma)
+  ) #variability of up to 0.6 is likely
+
+PV_m0 <- brm(
+  PV_f,
+  data = PV,
+  family = student(),
+  prior = PV_Prior,
+  sample_prior = "only",
+  backend="cmdstanr",
+  chains = 2,
+  cores = 2
+)
+
+
+pp_check(PV_m0, nsamples = 100) + xlim(-5, 5)
+
+
+
+PV_m1 <- brm(
+  PV_f,
+  data = PV,
+  family = student(),
+  prior = PV_Prior,
+  sample_prior = T,
+  backend="cmdstanr",
+  chains = 2,
+  threads = threading(2),
+  cores = 2)
+
+
+
+pp_check(PV_m1, nsamples = 100)+ xlim(-5, 5)
+```
+
+
+#### Plotting conditional effects for the skeptical model
+
+```{r}
+conditional_effects(PV_m1)
+plot(conditional_effects(PV_m1), points=T)
+```
+
+
+#### Plotting track and trace plots for the skeptical model
+
+```{r}
+color_scheme_set("viridis")
+mcmc_trace(PV_m1, pars = "Intercept")
+mcmc_rank_overlay(PV_m1, pars = "Intercept")
+```
+
+#### getting summary for the skeptical model
+
+```{r}
+summary(PV_m1)
+```
+
+
+### Step 4: Now re-run the model with the meta-analytic prior
+
+```{r}
+PV_Prior_Meta <- c(
+  prior(normal(0, 0.5), class = Intercept),  
+  prior(normal(0, 0.5), class = sd),
+  prior(normal(-0.44, 0.09), class = b, coef = DiagnosisTD),
+  prior(normal(0.5,0.25), class = b, coef = Age),
+  prior(normal(0,0.2), class = sigma)
+  ) 
+
+#Running prior only model
+
+PV_Meta_M0 <- brm(
+  PV_f,
+  data = PV,
+  family = student(),
+  prior = PV_Prior_Meta,
+  sample_prior = "only",
+  backend="cmdstanr",
+  chains = 2,
+  threads = threading(2),
+  cores = 2
+  )
+
+#Getting posterior distribution
+
+PV_Meta_M1 <- brm(
+  PV_f,
+  data = PV,
+  family = student(),
+  prior = PV_Prior_Meta,
+  sample_prior = T,
+  backend="cmdstanr",
+  chains = 2,
+  threads = threading(2),
+  cores = 2
+)
+
+pp_check(PV_Meta_M0, nsamples = 100) + xlim(-5, 5)
+pp_check(PV_Meta_M1, nsamples = 100)  + xlim(-5, 5)
+```
+
+
+#### Plotting track and trace plots for the informed model
+
+```{r}
+mcmc_trace(PV_Meta_M1, pars = "Intercept")
+mcmc_rank_overlay(PV_Meta_M1, pars = "Intercept")
+
+```
+
+
+#### Plotting conditional effects for the model
+
+```{r}
+conditional_effects(PV_Meta_M1)
+plot(conditional_effects(PV_Meta_M1), points=T)
+```
+
+#### Getting summary output for the model
+
+```{r}
+summary(PV_Meta_M1)
+```
+
+###Step 5: Compare the models
+
+#### Adding criterion for model comparison and comparing the model LOO values
+
+```{r}
+M0 <- add_criterion(PV_m1, criterion = c("bayes_R2", "loo"))
+M1 <- add_criterion(PV_Meta_M1, criterion = c("bayes_R2", "loo"))
+
+#Model comparison
+loo_compare(M0, M1)
+loo_model_weights(M0, M1) 
+
+```
