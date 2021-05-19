@@ -1,0 +1,148 @@
+---
+title: "Assignment 4 - SocCult"
+author: "Nikolaj Munch"
+output: html_document
+---
+
+### Loading + cleaning
+
+```{r}
+#Downloading required packages
+pacman::p_load(tidyverse, brms, ggpubr, remotes, cmdstanr, bayesplot, hBayesDM)
+#Importing dataset
+df <- read.csv("SocCult.csv", sep = ";")
+
+#Cleaning variables used in model
+df$BetPercent<- gsub(',','.', df$BetPercent)
+df$BetPercent <- as.numeric(df$BetPercent)
+df$Condition <- as.factor(df$Condition)
+
+#Scaling outcome variable
+df <- df %>% mutate(BetPercent = scale(BetPercent))
+
+```
+
+### Visualizing the distributions in the two conditions. 
+
+```{r}
+
+densplot <- ggplot(df, aes(BetPercent, group=Condition, fill=Condition)) +
+    geom_density(adjust=1.5, alpha=.4) + xlab("Initial investment") + ylab("Density") + labs(title="Money invested in each condition", size = 15) + scale_fill_discrete(name = "Condition : ", labels = c("Without social prime", "With social prime")) + theme(legend.position = "bottom",legend.box = "vertical")
+
+densplot
+
+```
+
+
+
+
+### Specifying formula, setting priors and running model
+
+```{r}
+#Defining model
+sc_f <- bf(BetPercent ~ Condition + (1 + Condition | ID))
+
+#Getting an overview of the priors to be specified
+get_prior(sc_f, data = df, family = student())
+
+# Defining priors
+
+sc_prior <- c(
+  prior(normal(0, 0.5), class = Intercept), 
+  prior(normal(0, 0.5), class = sd),
+  prior(normal(0, 0.25), class = b, coef = Condition1),
+  prior(normal(0,0.2), class = sigma)
+  )
+
+# Sampling prior 
+
+set_cmdstan_path(cmdstan_path())
+
+sc_m_prior <- brm(
+  formula = sc_f,
+  data = df,
+  family = student,
+  prior = sc_prior,
+  sample_prior="only",
+  backend="cmdstanr",
+  chains = 2,
+  cores = 2
+)
+
+# Prior predictive check
+
+pp_check(sc_m_prior, nsamples = 100)
+
+
+
+# Fitting model
+sc_m <- brm(
+  formula = sc_f,
+  data = df,
+  family = student,
+  prior = sc_prior,
+  sample_prior=T,
+  backend="cmdstanr",
+  threads = threading(2),
+  chains = 4
+)
+
+
+#Track and trace
+
+color_scheme_set("viridis")
+mcmc_trace(sc_m, pars = "Intercept")
+mcmc_rank_overlay(sc_m, pars = "Intercept")
+
+
+summary(sc_m)
+
+```
+
+#Testing current data with a BART model for discussion 
+
+```{r}
+
+
+Cond0data <- df %>% filter(Condition == 0)
+Cond1data <- df %>% filter(Condition == 1)
+
+Cond0data <- Cond0data[c("ID", "Crash", "Greed")] 
+
+Cond0data <- Cond0data %>% 
+  rename(
+    subjID = ID,
+    pumps = Greed,
+    explosion = Crash
+    )
+
+
+Cond0data$explosion <- gsub('TRUE','1', Cond0data$explosion)
+Cond0data$explosion <- gsub('FALSE','0', Cond0data$explosion)
+
+
+output <- bart_par4(
+  data = "example", niter = 2000, nwarmup = 1000, nchain = 4, ncore = 4)
+
+
+# Visually check convergence of the sampling chains (should look like 'hairy caterpillars')
+plot(output, type = "trace")
+
+# Check Rhat values (all Rhat values should be less than or equal to 1.1)
+rhat(output)
+
+# Plot the posterior distributions of the hyper-parameters (distributions should be unimodal)
+plot(output)
+
+# Show the WAIC and LOOIC model fit estimates
+printFit(output)
+}
+
+#This does not work, since the assumptions of this model are not met by my experimental design. For further research it would be extremely interesting to combine the gameplay mechanics of BART with a betting system, and them trying to analyse player behavior in relation to bet/pump + explosion. 
+
+
+```
+
+
+
+
